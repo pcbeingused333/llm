@@ -1445,7 +1445,7 @@ class Chat(_Shared, KeyModel):
                 **kwargs,
             )
             chunks = []
-            tool_calls = {}
+            tool_calls: dict[int, Any] = {}
             for chunk in completion:
                 chunks.append(chunk)
                 if chunk.usage:
@@ -1454,7 +1454,7 @@ class Chat(_Shared, KeyModel):
                     for tool_call in chunk.choices[0].delta.tool_calls or []:
                         if tool_call.function.arguments is None:
                             tool_call.function.arguments = ""
-                        idx = tool_call.index
+                        idx = _tool_call_key(tool_call, tool_calls)
                         if idx not in tool_calls:
                             tool_calls[idx] = tool_call
                             yield StreamEvent(
@@ -1563,7 +1563,7 @@ class AsyncChat(_Shared, AsyncKeyModel):
                 **kwargs,
             )
             chunks = []
-            tool_calls = {}
+            tool_calls: dict[int, Any] = {}
             async for chunk in completion:
                 if chunk.usage:
                     usage = chunk.usage.model_dump()
@@ -1572,7 +1572,7 @@ class AsyncChat(_Shared, AsyncKeyModel):
                     for tool_call in chunk.choices[0].delta.tool_calls or []:
                         if tool_call.function.arguments is None:
                             tool_call.function.arguments = ""
-                        idx = tool_call.index
+                        idx = _tool_call_key(tool_call, tool_calls)
                         if idx not in tool_calls:
                             tool_calls[idx] = tool_call
                             yield StreamEvent(
@@ -3023,6 +3023,27 @@ class Completion(Chat):
             response.response_json = remove_dict_none_values(completion.model_dump())
             yield completion.choices[0].text
         response._prompt_json = redact_data({"messages": messages})
+
+
+def _tool_call_key(tool_call, tool_calls: dict) -> int:
+    """Key used to accumulate a streamed tool call delta in ``tool_calls``.
+
+    Some OpenAI-compatible APIs (e.g. Gemini) omit ``index`` and send each
+    parallel call whole in its own chunk. Without an index, a delta starts a
+    new call only if it has a new id, or a name and no id; anything else
+    continues the latest call.
+    """
+    if tool_call.index is not None:
+        return tool_call.index
+    if tool_calls:
+        latest = next(reversed(tool_calls))
+        if tool_call.id:
+            is_new = tool_call.id != tool_calls[latest].id
+        else:
+            is_new = bool(tool_call.function.name)
+        if not is_new:
+            return latest
+    return len(tool_calls)
 
 
 def not_nulls(data) -> dict:
