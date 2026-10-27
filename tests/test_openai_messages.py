@@ -558,6 +558,25 @@ def _unindexed_repeated_id_tool_call_stream():
     yield b"data: [DONE]\n\n"
 
 
+def _mixed_indexed_and_unindexed_tool_calls_stream():
+    """An indexed call at index 1, then an unindexed call with a new id."""
+    yield _sse({"role": "assistant"})
+    for index, call_id, city in ((1, "call_1", "Paris"), (None, "call_2", "Tokyo")):
+        call = {
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"city": city}),
+            },
+        }
+        if index is not None:
+            call["index"] = index
+        yield _sse({}, tool_calls=[call])
+    yield _sse({}, finish_reason="stop")
+    yield b"data: [DONE]\n\n"
+
+
 def _get_weather(city: str) -> str:
     "Look up the weather."
     return "sunny"
@@ -594,6 +613,23 @@ class TestStreamingUnindexedToolCalls:
         assert [
             (tc.tool_call_id, tc.name, tc.arguments) for tc in response.tool_calls()
         ] == [("call_1", "get_weather", {"city": "Paris"})]
+
+    def test_unindexed_call_does_not_reuse_taken_index(self, httpx2_mock):
+        httpx2_mock.add_response(
+            method="POST",
+            url="https://api.openai.com/v1/chat/completions",
+            stream=IteratorStream(_mixed_indexed_and_unindexed_tool_calls_stream()),
+            headers={"Content-Type": "text/event-stream"},
+        )
+        model = llm.get_model("gpt-4o-mini")
+        response = model.prompt("weather?", tools=[_get_weather], key=API_KEY)
+        response.text()
+        assert [
+            (tc.tool_call_id, tc.name, tc.arguments) for tc in response.tool_calls()
+        ] == [
+            ("call_1", "get_weather", {"city": "Paris"}),
+            ("call_2", "get_weather", {"city": "Tokyo"}),
+        ]
 
     @pytest.mark.asyncio
     async def test_async_parallel_calls_kept_separate(self, httpx2_mock):

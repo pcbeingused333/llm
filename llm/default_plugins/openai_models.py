@@ -3043,7 +3043,11 @@ def _tool_call_key(tool_call, tool_calls: dict) -> int:
             is_new = bool(tool_call.function.name)
         if not is_new:
             return latest
-    return len(tool_calls)
+    # Skip keys already taken by calls that did send an index
+    key = len(tool_calls)
+    while key in tool_calls:
+        key += 1
+    return key
 
 
 def not_nulls(data) -> dict:
