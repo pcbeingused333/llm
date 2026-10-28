@@ -1445,7 +1445,7 @@ class Chat(_Shared, KeyModel):
                 **kwargs,
             )
             chunks = []
-            tool_calls: dict[int, Any] = {}
+            tool_calls: dict[tuple[str, int], Any] = {}
             for chunk in completion:
                 chunks.append(chunk)
                 if chunk.usage:
@@ -1563,7 +1563,7 @@ class AsyncChat(_Shared, AsyncKeyModel):
                 **kwargs,
             )
             chunks = []
-            tool_calls: dict[int, Any] = {}
+            tool_calls: dict[tuple[str, int], Any] = {}
             async for chunk in completion:
                 if chunk.usage:
                     usage = chunk.usage.model_dump()
@@ -3025,7 +3025,7 @@ class Completion(Chat):
         response._prompt_json = redact_data({"messages": messages})
 
 
-def _tool_call_key(tool_call, tool_calls: dict) -> int:
+def _tool_call_key(tool_call, tool_calls: dict) -> tuple[str, int]:
     """Key used to accumulate a streamed tool call delta in ``tool_calls``.
 
     Some OpenAI-compatible APIs (e.g. Gemini) omit ``index`` and send each
@@ -3034,7 +3034,7 @@ def _tool_call_key(tool_call, tool_calls: dict) -> int:
     continues the latest call.
     """
     if tool_call.index is not None:
-        return tool_call.index
+        return ("indexed", tool_call.index)
     if tool_calls:
         latest = next(reversed(tool_calls))
         if tool_call.id:
@@ -3043,11 +3043,9 @@ def _tool_call_key(tool_call, tool_calls: dict) -> int:
             is_new = bool(tool_call.function.name)
         if not is_new:
             return latest
-    # Skip keys already taken by calls that did send an index
-    key = len(tool_calls)
-    while key in tool_calls:
-        key += 1
-    return key
+    # Explicit indices and unindexed calls use separate key namespaces so
+    # that a mixed stream can never merge two different calls.
+    return ("unindexed", sum(kind == "unindexed" for kind, _ in tool_calls))
 
 
 def not_nulls(data) -> dict:
